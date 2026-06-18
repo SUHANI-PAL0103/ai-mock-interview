@@ -1,5 +1,5 @@
 const Interview = require('../models/Interview');
-const gemini = require('../services/gemini');
+const ai = require('../services/huggingface');
 
 // POST /api/interviews
 exports.createInterview = async (req, res, next) => {
@@ -8,8 +8,8 @@ exports.createInterview = async (req, res, next) => {
 
     const count = questionCount || 10;
 
-    // Generate questions using Gemini
-    const generatedQuestions = await gemini.generateQuestions({
+    // Generate questions using OpenAI
+    const generatedQuestions = await ai.generateQuestions({
       role,
       experience,
       type: type || 'Mixed',
@@ -144,8 +144,8 @@ exports.submitAnswer = async (req, res, next) => {
 
     const currentQuestion = interview.questions[questionIndex];
 
-    // Evaluate answer using Gemini
-    const evaluation = await gemini.evaluateAnswer({
+    // Evaluate answer using OpenAI
+    const evaluation = await ai.evaluateAnswer({
       question: currentQuestion.question,
       answer,
       expectedKeywords: currentQuestion.expectedKeywords,
@@ -255,8 +255,8 @@ exports.submitInterview = async (req, res, next) => {
 
     await interview.save();
 
-    // Generate summary report using Gemini
-    const summaryReport = await gemini.generateSummaryReport({
+    // Generate summary report using OpenAI
+    const summaryReport = await ai.generateSummaryReport({
       role: interview.role,
       experience: interview.experience,
       questions: interview.questions,

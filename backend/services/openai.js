@@ -1,24 +1,18 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OpenAI = require('openai');
 const localai = require('./localai');
 
-// Default to a supported model. gemini-pro is deprecated, use flash models instead.
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-
-// Validate API key exists
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-  console.error('❌ GEMINI_API_KEY is not set or invalid in .env file. Get a key from https://aistudio.google.com/apikey');
+const apiKey = process.env.OPENAI_API_KEY;
+if (!apiKey || apiKey === 'your-openai-api-key-here') {
+  console.error('❌ OPENAI_API_KEY is not set or invalid in .env file. Get a key from https://platform.openai.com/api-keys');
 }
 
-const genAI = new GoogleGenerativeAI(apiKey);
+const openai = new OpenAI({ apiKey });
 
 /**
  * Generate interview questions based on role, experience, type, and count
  */
 exports.generateQuestions = async ({ role, experience, type, count, techStack }) => {
   try {
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
     const prompt = `You are an expert technical interviewer. Generate exactly ${count} interview questions for a ${role} candidate at ${experience} level.
 
 Interview Type: ${type}
@@ -45,23 +39,24 @@ Format:
   }
 ]`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 4096,
+    });
 
-    // Clean up - remove any markdown code block markers
+    const text = response.choices[0]?.message?.content || '';
     const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-
     const questions = JSON.parse(cleaned);
 
     if (!Array.isArray(questions) || questions.length === 0) {
-      throw new Error('Invalid response format from Gemini');
+      throw new Error('Invalid response format from OpenAI');
     }
 
     return questions;
   } catch (error) {
-    console.error('Gemini generateQuestions error:', error);
-    // Fallback to local AI when Gemini is unavailable
+    console.error('OpenAI generateQuestions error:', error);
     return localai.generateQuestions({ role, experience, type, count, techStack });
   }
 };
@@ -71,8 +66,6 @@ Format:
  */
 exports.evaluateAnswer = async ({ question, answer, expectedKeywords, difficulty }) => {
   try {
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
     const prompt = `Evaluate this interview answer. Be strict and realistic.
 
 Question: "${question}"
@@ -95,22 +88,24 @@ Provide evaluation as JSON only. No markdown, no code blocks, no other text.
   "followUpQuestion": "<a relevant follow-up question based on this answer>"
 }`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+      max_tokens: 2048,
+    });
 
+    const text = response.choices[0]?.message?.content || '';
+    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
     return JSON.parse(cleaned);
   } catch (error) {
-    console.error('Gemini evaluateAnswer error:', error);
-    // Fallback to local AI
+    console.error('OpenAI evaluateAnswer error:', error);
     return localai.evaluateAnswer({ question, answer, expectedKeywords, difficulty });
   }
 };
 
-
 /**
- * Analyze resume content using Gemini
+ * Analyze resume content using ChatGPT
  */
 exports.analyzeResumeContent = async (resumeText, jobDescription, retries = 3) => {
   const jdSection = jobDescription
@@ -151,25 +146,25 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const response = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 4096,
+      });
+
+      const text = response.choices[0]?.message?.content || '';
       const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
       return JSON.parse(cleaned);
     } catch (error) {
       const isRateLimit = error.status === 429;
-      const isQuota = error.status === 403 || error.status === 429;
-      
-      if ((isRateLimit || isQuota) && attempt < retries) {
-        const delay = Math.pow(2, attempt) * 2000; // 2s, 4s, 8s backoff
-        console.log(`Gemini rate limited. Retrying in ${delay/1000}s... (attempt ${attempt + 1}/${retries})`);
+      if ((isRateLimit || error.status === 429) && attempt < retries) {
+        const delay = Math.pow(2, attempt) * 2000;
+        console.log(`OpenAI rate limited. Retrying in ${delay/1000}s... (attempt ${attempt + 1}/${retries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
-      
-      console.error('Gemini analyzeResume error:', error.message || error);
-      // Fallback to local AI
+      console.error('OpenAI analyzeResume error:', error.message || error);
       return localai.analyzeResume(resumeText, jobDescription);
     }
   }
@@ -180,8 +175,6 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
  */
 exports.generateCodingChallenge = async ({ role, difficulty, techStack }) => {
   try {
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
     const prompt = `Generate a coding challenge for a ${role} candidate at ${difficulty} level.
 ${techStack && techStack.length ? `Tech Stack: ${techStack.join(', ')}` : ''}
 
@@ -201,14 +194,18 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
   "topics": ["<topic1>", "<topic2>"]
 }`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 4096,
+    });
 
+    const text = response.choices[0]?.message?.content || '';
+    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
     return JSON.parse(cleaned);
   } catch (error) {
-    console.error('Gemini generateCodingChallenge error:', error);
+    console.error('OpenAI generateCodingChallenge error:', error);
     return null;
   }
 };
@@ -218,8 +215,6 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
  */
 exports.generateFollowUp = async ({ originalQuestion, userAnswer, score, role }) => {
   try {
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
     const difficulty = score >= 70 ? 'harder' : score >= 40 ? 'similar' : 'easier';
 
     const prompt = `Based on this interview exchange, generate a ${difficulty} follow-up question.
@@ -237,14 +232,18 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
   "expectedKeywords": ["<keyword1>", "<keyword2>"]
 }`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 1024,
+    });
 
+    const text = response.choices[0]?.message?.content || '';
+    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
     return JSON.parse(cleaned);
   } catch (error) {
-    console.error('Gemini generateFollowUp error:', error);
+    console.error('OpenAI generateFollowUp error:', error);
     return null;
   }
 };
@@ -254,8 +253,6 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
  */
 exports.generateSummaryReport = async ({ role, experience, questions, overallScore }) => {
   try {
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
     const questionsSummary = questions.map((q, i) =>
       `Q${i + 1}: ${q.question} | Score: ${q.score} | Feedback: ${q.feedback}`
     ).join('\n');
@@ -280,45 +277,18 @@ Return ONLY valid JSON. No markdown, no code blocks, no other text.
   "learningRoadmap": ["<step1>", "<step2>", "<step3>"]
 }`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+      max_tokens: 4096,
+    });
 
+    const text = response.choices[0]?.message?.content || '';
+    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
     return JSON.parse(cleaned);
   } catch (error) {
-    console.error('Gemini generateSummaryReport error:', error);
-    // Fallback to local AI
+    console.error('OpenAI generateSummaryReport error:', error);
     return localai.generateSummaryReport({ role, experience, questions, overallScore });
   }
 };
-
-// Fallback questions if Gemini API fails
-function getFallbackQuestions(role, type, count) {
-  const fallbacks = {
-    'Java Developer': [
-      { question: 'What is the difference between JDK, JRE, and JVM?', category: 'technical', difficulty: 'easy', expectedKeywords: ['JDK', 'JRE', 'JVM', 'compiler', 'runtime'] },
-      { question: 'Explain garbage collection in Java.', category: 'technical', difficulty: 'medium', expectedKeywords: ['garbage collection', 'heap', 'mark and sweep', 'generational'] },
-      { question: 'What are the main features of Java 8?', category: 'technical', difficulty: 'medium', expectedKeywords: ['lambda', 'stream', 'optional', 'functional interface'] },
-      { question: 'Explain the concept of multithreading in Java.', category: 'technical', difficulty: 'hard', expectedKeywords: ['thread', 'synchronization', 'race condition', 'executor service'] },
-      { question: 'Describe a challenging project you worked on.', category: 'behavioral', difficulty: 'medium', expectedKeywords: ['project', 'challenge', 'solution', 'team'] },
-    ],
-  };
-
-  const defaultQs = [
-    { question: `Explain the core concepts of ${role} role.`, category: 'technical', difficulty: 'medium', expectedKeywords: [role, 'concepts', 'experience'] },
-    { question: 'Describe your experience with modern development tools.', category: 'behavioral', difficulty: 'medium', expectedKeywords: ['tools', 'experience', 'development'] },
-    { question: 'How do you stay updated with industry trends?', category: 'hr', difficulty: 'easy', expectedKeywords: ['learning', 'trends', 'growth'] },
-    { question: 'Tell me about a time you resolved a conflict in your team.', category: 'behavioral', difficulty: 'medium', expectedKeywords: ['conflict', 'resolution', 'team'] },
-    { question: 'What are your career goals for the next 5 years?', category: 'hr', difficulty: 'easy', expectedKeywords: ['goals', 'career', 'growth'] },
-    { question: `Explain the difference between REST and GraphQL.`, category: 'technical', difficulty: 'medium', expectedKeywords: ['REST', 'GraphQL', 'API', 'endpoint'] },
-    { question: 'How do you ensure code quality in your projects?', category: 'technical', difficulty: 'medium', expectedKeywords: ['testing', 'code review', 'quality', 'CI/CD'] },
-    { question: 'Describe a situation where you had to learn a new technology quickly.', category: 'behavioral', difficulty: 'medium', expectedKeywords: ['learning', 'adaptability', 'technology'] },
-    { question: 'What motivates you to perform at your best?', category: 'hr', difficulty: 'easy', expectedKeywords: ['motivation', 'performance', 'goals'] },
-    { question: 'Explain the concept of microservices architecture.', category: 'technical', difficulty: 'hard', expectedKeywords: ['microservices', 'architecture', 'decentralized', 'scalability'] },
-  ];
-
-  const pool = fallbacks[role] || defaultQs;
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
-}
